@@ -509,24 +509,43 @@
                         
                         const poll = { parties: {} };
                         let pollDate = null;
-                        let rawDateString = '';
                         let pollsterName = '';
 
                         if (dateColumnIndex !== -1 && rawValues[dateColumnIndex] !== undefined) {
-                            rawDateString = rawValues[dateColumnIndex].trim();
-                            
-                            const parsedDate = new Date(rawDateString);
+                            let rawDateString = rawValues[dateColumnIndex].trim();
+                            let dateToParse = rawDateString;
+
+                            // Regex to capture "Day Month" from the start and "Year" from the end
+                            // This handles "DD Mon – DD Mon YYYY" and "DD Mon YYYY"
+                            const dateRangeRegex = /^(\d{1,2}\s[A-Za-z]+).*?(\d{4})$/;
+                            const singleDateRegex = /^(\d{1,2}\s[A-Za-z]+\s\d{4})$/;
+
+                            const matchRange = rawDateString.match(dateRangeRegex);
+                            const matchSingle = rawDateString.match(singleDateRegex);
+
+                            if (matchRange && matchRange[1] && matchRange[2]) {
+                                // For "18 Jun – 3 Jul 2025", it captures "18 Jun" and "2025"
+                                dateToParse = `${matchRange[1]} ${matchRange[2]}`;
+                            } else if (matchSingle && matchSingle[1]) {
+                                // For "23 Apr 2025"
+                                dateToParse = matchSingle[1];
+                            } else {
+                                // Fallback: try to just use the original string, but log a warning
+                                console.warn(`[${sheetName}] Date format not fully recognized for '${rawDateString}'. Attempting direct parse.`);
+                            }
+
+                            const parsedDate = new Date(dateToParse);
                             if (!isNaN(parsedDate.getTime())) {
                                 pollDate = parsedDate;
                             } else {
-                                console.warn(`[${sheetName}] Invalid date format in row ${i+1}: '${rawDateString}'. Date object will be null.`);
+                                console.warn(`[${sheetName}] Failed to parse date '${rawDateString}' (attempted to parse '${dateToParse}'). Date object will be null.`);
                             }
                         } else if (requireDate) {
                             console.warn(`[${sheetName}] Date column missing or empty in row ${i+1} and date is required. Skipping this poll.`);
                             continue;
                         }
                         poll.date = pollDate;
-                        poll.rawDateString = rawDateString;
+                        poll.rawDateString = rawValues[dateColumnIndex] || ''; // Store original string for display
 
                         if (pollsterColumnIndex !== -1 && rawValues[pollsterColumnIndex] !== undefined) {
                             pollsterName = rawValues[pollsterColumnIndex].trim();
@@ -923,20 +942,19 @@
                         const totalSeats = totalNewSeneddSeats; // 96 seats
                         let remainingSeats = totalSeats;
                         const seatAllocation = {};
-                        parties.forEach(p => seatAllocation[p.name] = 0);
-
-                        // D'Hondt method for 96 seats based on overall vote percentages
-                        // This simplifies the 16 multi-member constituencies into one large allocation.
+                        // Ensure all parties have a starting divisor of 1
+                        parties.forEach(p => seatAllocation[p.name] = 0); // Initialize seat counts
                         const dHondtDivisors = {};
-                        parties.forEach(p => dHondtDivisors[p.name] = 1);
+                        parties.forEach(p => dHondtDivisors[p.name] = 1); // Initialize divisors
 
                         while (remainingSeats > 0) {
                             let highestQuotient = -1;
                             let winnerName = null;
 
                             for (const party of finalResults) {
-                                // Use voteValue (overall percentage)
-                                const quotient = party.voteValue / dHondtDivisors[party.name];
+                                // Ensure divisor is not zero or undefined
+                                const currentDivisor = dHondtDivisors[party.name] || 1; 
+                                const quotient = party.voteValue / currentDivisor;
                                 if (quotient > highestQuotient) {
                                     highestQuotient = quotient;
                                     winnerName = party.name;
@@ -946,8 +964,10 @@
                             if (winnerName) {
                                 const winningParty = finalResults.find(p => p.name === winnerName);
                                 if (winningParty) {
-                                    winningParty.seatAllocation[winningParty.name]++;
-                                    dHondtDivisors[winningParty.name]++; // Increment divisor for the winning party
+                                    // Corrected line: Directly update seatAllocation for the winning party
+                                    seatAllocation[winningParty.name]++;
+                                    // Increment the divisor for the winning party
+                                    dHondtDivisors[winningParty.name] = (dHondtDivisors[winningParty.name] || 0) + 1;
                                 }
                             }
                             remainingSeats--;
